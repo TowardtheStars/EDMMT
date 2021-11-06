@@ -3,13 +3,13 @@ import logging, json
 
 
 HGE_STATES = {
-"Federation": {"Composite"}, 
-"Empire": {"Shielding"}, 
-"Boom": {"Heat", "Alloys"}, 
-"Civil Unrest": {"Mechanical components"}, 
-"War": {"Thermic", "Capacitors"}, 
-"Civil War": {"Thermic", "Capacitors"}, 
-"Outbreak": {"Chemical"}
+    "Federation": {"Composite"}, 
+    "Empire": {"Shielding"}, 
+    "Boom": {"Heat", "Alloys"}, 
+    "Civil Unrest": {"Mechanical components"}, 
+    "War": {"Thermic", "Capacitors"}, 
+    "Civil War": {"Thermic", "Capacitors"}, 
+    "Outbreak": {"Chemical"}
 }
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,7 @@ def state2mat(states:dict):
     return {k: turn(v) for (k, v) in states.items()}
 
 if __name__ == '__main__':
+    
     pf = PopulationFilterEDSM(1000000)
 
     logger.info("Getting nearby stars from EDSM")
