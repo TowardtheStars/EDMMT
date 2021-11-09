@@ -1,16 +1,8 @@
 import requests
 import logging, json
+import traceback
 
 
-HGE_STATES = {
-    "Federation": {"Composite"}, 
-    "Empire": {"Shielding"}, 
-    "Boom": {"Heat", "Alloys"}, 
-    "Civil Unrest": {"Mechanical components"}, 
-    "War": {"Thermic", "Capacitors"}, 
-    "Civil War": {"Thermic", "Capacitors"}, 
-    "Outbreak": {"Chemical"}
-}
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -23,9 +15,7 @@ def getNearbyStars(name:str, radius:float):
     url = "https://www.edsm.net/api-v1/sphere-systems"
     res = requests.post(url, {
         "systemName": name,
-        "radius": radius,
-        "showInformation": 1,
-        "showId": 1
+        "radius": radius
         })
 
     
@@ -57,51 +47,47 @@ def showdata(jsondata):
 
 
 def genManuStates(stars:list):
-    fmt = "https://eddbapi.kodeblox.com/api/v4/populatedsystems?systemaddress="
+    fmt = "https://elitebgs.app/api/ebgs/v5/systems?factionDetails=true&name="
     result = {}
 
     logger.info("Getting system details.")
-    res = requests.get(fmt + "&systemaddress=".join([str(sid) for sid in stars])).json()
+    
+    res = requests.get(fmt + "&name=".join([str(sid) for sid in stars])).json()
     stars_info = res["docs"]
 
-    while int(res["page"]) < int(res["pages"]):
-        res = requests.get(fmt+"&systemaddress=".join([str(sid) for sid in stars])+"&page="+str(int(res["page"]) + 1)).json()
-        stars_info.extend(res["docs"])
-
-
     for star in stars_info:
-        logger.info("Summarizing System: " + star["name"])
+        try:
+            logger.info("Summarizing System: " + star["name"])
+            
+            states_primitive = [faction["faction_details"]["faction_presence"]["state"] for faction in star["factions"]]
+            
+            states_active = [faction["faction_details"]["faction_presence"]["active_states"] for faction in star["factions"]]
+            states_active = [state for state_list in states_active for state in state_list]
+            states_active = [s["state"] for s in states_active]
+            
+            states_recovering = [faction["faction_details"]["faction_presence"]["recovering_states"] for faction in star["factions"]]
+            states_recovering = [state for state_list in states_recovering for state in state_list]
+            states_recovering = [s["state"] for s in states_recovering]
 
-        states = {s["name"] for s in star["states"]}
-        faction_url = "https://elitebgs.app/api/ebgs/v5/factions?allegiance=federation&minimal=true&allegiance=empire&system=" + star["name"]
-        
-        f_res = requests.get(faction_url).json()
-        f_data = f_res["docs"]
-        while int(f_res["page"]) < int(f_res["pages"]):
-            f_res = requests.get(faction_url + "&page=" + str(int(f_res["page"]) + 1)).json()
-            f_data.extend(f_res["docs"])
-        
-        emp = False
-        fed = False
-        for f in f_data:
-            if emp and fed:
-                break
-            elif not emp and f["allegiance"] == "empire":
-                emp = True
-                states.add("Empire")
-            elif not fed and f["allegiance"] == "federation":
-                fed = True
-                states.add("Federation")
+            allegiance = {faction["faction_details"]["allegiance"] for faction in star["factions"]}
+            
+            states = set(
+                map(
+                    str.capitalize, 
+                    (set(states_primitive) | set(states_active) | set(states_recovering) | allegiance)
+                    )
+                ) & HGE_STATES.keys()
 
-        states = states & set(HGE_STATES.keys())
-
-        if len(states) > 0:
-            result[star["name"]] = list(states)
+            if len(states) > 0:
+                result[star["name"]] = list(states)
+        except Exception as e:
+            logger.warning("Unable to extract data of system: " + star["name"])
+            logger.warning(traceback.format_exc())
 
     return result
 
 def strip2names(edsm):
-    return {e["id64"]: e["name"] for e in edsm}
+    return {e["name"] for e in edsm}
 
 
 def reduceEDSM2name(l):
@@ -121,7 +107,7 @@ if __name__ == '__main__':
     pf = PopulationFilterEDSM(1000000)
 
     logger.info("Getting nearby stars from EDSM")
-    ss = getNearbyStars("54 Ceti", 40)
+    ss = getNearbyStars("54 Ceti", 100)
     
     logger.info("Checking populated systems")
     populated = pf(ss)
@@ -129,9 +115,10 @@ if __name__ == '__main__':
     logger.info("Populated systems: {}".format(len(populated)))
 
     logger.info("Generating Manufactured States")
-    states = genManuStates(populated.keys())
+    states = genManuStates(populated)
 
     logger.info("Merging material types")
     mats = state2mat(states)
+    mats = {k: v for (k, v) in mats.items() if "Chemical" in v}
     showdata(mats)
 
