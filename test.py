@@ -6,9 +6,11 @@ import asyncio
 #     eddb = json.load(file)
 # print(json.dumps(eddb[0], indent=2))
 
-mmdb = MMDB("./db/mmdb.json")
+mmdb = MMDB()
 # mmdb.eddb_sys._from_local_file()
 # print(mmdb.eddb_sys.last_update.isoformat())
-print(json.dumps(list(mmdb.database.values())[0], indent=2))
+mmdb.load()
+print(json.dumps(len(mmdb.values()), indent=2))
+print(mmdb.get("1111"))
 # asyncio.get_event_loop().close()
 

@@ -16,6 +16,8 @@ HGE_TYPES = {
     "outbreak": {"Chemical"}
 }
 
+G5_MAT = ("Chemical", "Composite", "Shielding", "Heat", "Alloys", "Mechanical components", "Thermic", "Capacitors")
+
 class AbstractRemoteDataBase:
     def __init__(self, local_path, *args, **kwargs):
         self._last_update = datetime.min
@@ -200,11 +202,8 @@ class MMDB(AbstractRemoteDataBase):
     {
         <edsm id>:
         {
-            "eddb_id": <eddb id>,
             "edsm_id": <edsm id>, 
-            "ed_system_address": <ED system address>,
             "name": <system name>,
-            "last_update": <integer time stamp>,
             "material_states":
             {
                 "empire": <empire faction count>,
@@ -292,8 +291,7 @@ class MMDB(AbstractRemoteDataBase):
 
             passData(
                 item, system, 
-                "edsm_id", "name", "population", "ed_system_address",
-                eddb_id="id", last_update=("minor_factions_updated_at", datetime.fromtimestamp),
+                "edsm_id", "name", "population",
                 material_states=("minor_factions_presences", count_states)
                 )
 
