@@ -18,18 +18,50 @@ HGE_TYPES = {
 
 class AbstractRemoteDataBase:
     def __init__(self, local_path, *args, **kwargs):
+        self._last_update = datetime.min
         self.local_path = local_path
-        self._db = None
+        
         self._dirs = os.path.split(self.local_path)[0]
         self._logger = getLogger()
         self._create_dirs()
+        self._db = {}
+
+        self._editable = kwargs.get("editable", False)
+
         # load local database after definations
         if os.path.exists(self.local_path):
             self._from_local_file()
 
     @property
+    def last_update(self):
+        return self._last_update
+
+    def __getattr__(self, attr):
+        forward_db_interfaces = [
+            "get", "keys", "values", "items", 
+            "__getitem__", "__iter__", "__len__", "__contains__"
+        ]
+        __forward_set_interfaces = [
+            "__setitem__", "update", "clear"
+        ]
+        if self._editable:
+            forward_db_interfaces = forward_db_interfaces + __forward_set_interfaces
+        
+        if attr in forward_db_interfaces:
+            return getattr(self._db, attr)
+        return self.__dict__[attr]
+
+    @property
     def logger(self):
         return self._logger
+
+    def load(self):
+        if not os.path.exists(self.local_path):
+            self.logger.debug("Local file \"{}\" does not exist, fetching from remote.".format(self.local_path))
+            self.update_from_remote()
+        else:
+            self._from_local_file()
+            self.check_update()
         
     def update_from_remote(self):
         if self._update_from_remote():
@@ -70,7 +102,7 @@ Directories should already be created
             self.logger.debug("Local file \"{}\" does not exist, fetching from remote.".format(self.local_path))
             self.update_from_remote()
         else:
-            if self._db is None:
+            if len(self._db) == 0:
                 self._from_local_file()
             # self.check_update() # Check update should be run seperatly
         return self._db
@@ -92,8 +124,8 @@ class RemoteEDDBDataBase (AbstractRemoteDataBase):
         request_headers:dict=None, converter:callable=None
         ):
         
-        self._last_update = datetime.min
-        AbstractRemoteDataBase.__init__(self, local_path or "./eddb/" + name + ".json")
+        AbstractRemoteDataBase.__init__(self, local_path or "./db/eddb_" + name + ".json")
+        
         self.name = name
 
         self._logger = self._logger.getChild("EDDB:" + name)
@@ -101,15 +133,7 @@ class RemoteEDDBDataBase (AbstractRemoteDataBase):
 
         # Default headers retrieve gziped data
         self.request_headers = request_headers or {"Accept-Encoding":"gzip, deflate, sdch"}
-
         self.converter = converter or (lambda x:x)
-
-        
-
-
-    @property
-    def last_update(self):
-        return self._last_update
     
     @property
     def remote_url(self):
@@ -129,17 +153,19 @@ class RemoteEDDBDataBase (AbstractRemoteDataBase):
 
     def _save_to_local(self):
         with open(self.local_path, "w") as file:
-            json.dump(self._db, file, indent=2)
-        with open(self.local_path + '.timestamp', 'w') as file:
-            file.writelines(self.last_update.isoformat())
+            mdb = {
+                "db": self._db,
+                "timestamp": self.last_update.isoformat()
+            }
+            json.dump(mdb, file, indent=2)
 
     def _from_local_file(self):
         self.logger.info("Loading from local file \"" + self.local_path + "\"")
         try:
             with open(self.local_path) as file:
-                self._db = json.load(file)
-            with open(self.local_path + '.timestamp') as file:
-                _last_update = datetime.fromisoformat(file.readline())
+                mdb = json.load(file)
+                self._db = mdb["db"]
+                _last_update = datetime.fromisoformat(mdb["timestamp"])
                 self._last_update = _last_update
                 self.logger.debug("Local DB timestamp: " + self.last_update.isoformat())
 
@@ -162,8 +188,6 @@ Head the URL to check if EDDB data is updated
         self.logger.debug("Local: Last-Update: {}".format(self.last_update.isoformat()))
         lastmodified = datetime.strptime(headers["Last-Modified"], '%a, %d %b %Y %H:%M:%S %Z')
         return self._last_update < lastmodified
-
-
 
 
 class MMDB(AbstractRemoteDataBase):
@@ -190,8 +214,7 @@ class MMDB(AbstractRemoteDataBase):
                 "boom": <faction count>,
                 "civil unrest": <faction count>
             },
-            "population": <population>,
-            "last_update": <int timestamp>
+            "population": <population>
         }
     }
     
@@ -210,11 +233,13 @@ class MMDB(AbstractRemoteDataBase):
     """
     VERSION = 2
 
-    def __init__(self, local_path, **kwargs):
-        
+    def __init__(self, local_path=None, **kwargs):
 
-        self._last_update = datetime.min
+        if local_path is None:
+            local_path = "./db/mmdb.json"
+
         AbstractRemoteDataBase.__init__(self, local_path)
+
         self._logger = self._logger.getChild("MMDB")
 
         self.eddb_sys = RemoteEDDBDataBase(
@@ -229,17 +254,12 @@ class MMDB(AbstractRemoteDataBase):
         )
 
     @property
-    def last_update(self):
-        return self._last_update
-
-    @property
     def last_update_systems(self):
         return self.eddb_sys.last_update
 
     @property
     def last_update_factions(self):
-        return self.eddb_faction.last_update
-        
+        return self.eddb_faction.last_update        
 
     def _update_from_remote(self):
         
@@ -247,28 +267,36 @@ class MMDB(AbstractRemoteDataBase):
             for k in args:
                 dst[k] = src[k]
             for k, v in kwargs.items():
-                dst[k] = src[v]
+                if isinstance(v, str):
+                    dst[k] = src[v]
+                elif isinstance(v, tuple):
+                    dst[k] = v[1](src[v[0]])
 
         def convert(system):
             item = {}
-            passData(item, system, 
+
+            def count_states(factions):
+                states = list()
+                for faction in factions:
+                    allegiance = [self.eddb_faction.database.get(str(faction["minor_faction_id"]))["allegiance"].lower()]
+                    active = [state["name"].lower() for state in faction["active_states"]]
+                    recovering = [state["name"].lower() for state in faction["recovering_states"]]
+                    states += allegiance + active + recovering
+                
+                state_count = {
+                    name: states.count(name) for name in HGE_TYPES.keys()
+                }
+
+                state_count["war"] += states.count("civil war")
+                return state_count
+
+            passData(
+                item, system, 
                 "edsm_id", "name", "population", "ed_system_address",
-                eddb_id="id", last_update="minor_factions_updated_at"
+                eddb_id="id", last_update=("minor_factions_updated_at", datetime.fromtimestamp),
+                material_states=("minor_factions_presences", count_states)
                 )
-            states = list()
-            for faction in system["minor_faction_presences"]:
-                allegiance = [self.eddb_faction.database.get(str(faction["minor_faction_id"]))["allegiance"].lower()]
-                active = [state["name"].lower() for state in faction["active_states"]]
-                recovering = [state["name"].lower() for state in faction["recovering_states"]]
-                states += allegiance + active + recovering
-            
-            state_count = {
-                name: states.count(name) for name in HGE_TYPES.keys()
-            }
 
-            state_count["war"] += states.count("civil war")
-
-            item["material_states"] = state_count
             return item
 
         try:
@@ -313,7 +341,6 @@ class MMDB(AbstractRemoteDataBase):
             self._db = mdb["db"]
             self.version = mdb["version"]
             self._last_update = datetime.fromisoformat(mdb["timestamp"])
-
-        
+        self.logger.info("Loaded Database, size: {}".format(len(self._db)))
 
 
